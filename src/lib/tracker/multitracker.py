@@ -8,7 +8,10 @@ import time
 import torch
 import cv2
 import torch.nn.functional as F
-
+import ipdb
+from roi_align import RoIAlign      # RoIAlign module
+from roi_align import CropAndResize # crop_and_resize module
+# from detectron2.layers import ROIAlign
 from models.model import create_model, load_model
 from models.decode import mot_decode
 from tracking_utils.utils import *
@@ -20,7 +23,8 @@ from .basetrack import BaseTrack, TrackState
 from utils.post_process import ctdet_post_process
 from utils.image import get_affine_transform
 from models.utils import _tranpose_and_gather_feat
-
+from .detector import build_detector
+from .deep_utils.parser import get_config
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
@@ -198,9 +202,19 @@ class JDETracker(object):
         self.std = np.array(opt.std, dtype=np.float32).reshape(1, 1, 3)
 
         self.kalman_filter = KalmanFilter()
-
+        self.roi_align = RoIAlign(7, 7)
+        cfg = get_config()
+        cfg.merge_from_file("/home/hongwei/track-human/FairMOT/src/lib/tracker/deep_configs/yolov3.yaml")
+        cfg.merge_from_file("/home/hongwei/track-human/FairMOT/src/lib/tracker/deep_configs/deep_sort.yaml")
+        self.detector = build_detector(cfg, True)
+        # self.roi_align = ROIAlign(
+        #         [7, 7],
+        #         spatial_scale=1.0 / 4,
+        #         sampling_ratio=0,
+        #         aligned=True,
+        #     )
     def post_process(self, dets, meta):
-        dets = dets.detach().cpu().numpy()
+        # dets = dets.detach().cpu().numpy()
         dets = dets.reshape(1, -1, dets.shape[2])
         dets = ctdet_post_process(
             dets.copy(), [meta['c']], [meta['s']],
@@ -245,35 +259,55 @@ class JDETracker(object):
         ''' Step 1: Network forward, get detections & embeddings'''
         with torch.no_grad():
             output = self.model(im_blob)[-1]
-            hm = output['hm'].sigmoid_()
-            wh = output['wh']
-            id_feature = output['id']
-            id_feature = F.normalize(id_feature, dim=1)
+            # hm = output['hm'].sigmoid_()
+            # wh = output['wh']
+            # reg = output['reg'] if self.opt.reg_offset else None
+            # dets, inds = mot_decode(hm, wh, reg=reg, ltrb=self.opt.ltrb, K=self.opt.K)
 
-            reg = output['reg'] if self.opt.reg_offset else None
-            dets, inds = mot_decode(hm, wh, reg=reg, ltrb=self.opt.ltrb, K=self.opt.K)
-            id_feature = _tranpose_and_gather_feat(id_feature, inds)
-            id_feature = id_feature.squeeze(0)
-            id_feature = id_feature.cpu().numpy()
-
-        dets = self.post_process(dets, meta)
-        dets = self.merge_outputs([dets])[1]
-
-        remain_inds = dets[:, 4] > self.opt.conf_thres
-        dets = dets[remain_inds]
-        id_feature = id_feature[remain_inds]
+            bboxes, scores, clses = self.detector(im_blob)
+            human_inds = np.where(clses==0)[0]
+            bboxes = bboxes[human_inds]
+            scores = np.expand_dims(scores[human_inds], axis=1)
+            clses = np.expand_dims(clses[human_inds], axis=1)
+            num_boxes = len(bboxes)
+            dets = np.concatenate((bboxes, scores, clses), axis=1)
+            scale = 1.0 / 4
+            bboxes_roi_align = torch.from_numpy(bboxes.copy()).cuda()
+            bboxes_roi_align *= scale
+            box_indexs = torch.from_numpy(np.arange(num_boxes)).to(torch.int).cuda()
+            if num_boxes > 0:
+                id_feature = output['id']
+                id_feature = F.normalize(id_feature, dim=1)
+                id_feature = id_feature.repeat(num_boxes, 1, 1, 1)
+                id_feature = self.roi_align(id_feature, bboxes_roi_align, box_indexs)
+                id_feature = torch.mean(id_feature, [2, 3]).cpu().numpy()
+            else:
+                id_feature = np.empty((0, 128), dtype=float)
+            # id_feature = _tranpose_and_gather_feat(id_feature, inds)
+            # id_feature = id_feature.squeeze(0)
+            # id_feature = id_feature.cpu().numpy()
+        dets[:, 0] = dets[:, 0] / inp_width * width
+        dets[:, 1] = dets[:, 1] / inp_height * height
+        dets[:, 2] = dets[:, 2] / inp_width * width
+        dets[:, 3] = dets[:, 3] / inp_height * height
+        # dets = self.post_process(dets, meta)
+        # dets = self.merge_outputs([dets])[1]
+        # ipdb.set_trace()
+        # remain_inds = dets[:, 4] > self.opt.conf_thres
+        # dets = dets[remain_inds]
+        # id_feature = id_feature[remain_inds]
 
         # vis
         '''
         for i in range(0, dets.shape[0]):
             bbox = dets[i][0:4]
-            cv2.rectangle(img0, (bbox[0], bbox[1]),
-                          (bbox[2], bbox[3]),
-                          (0, 255, 0), 2)
+            # ipdb.set_trace()
+            cv2.rectangle(img0, pt1=(int(bbox[0]), int(bbox[1])), pt2=(int(bbox[2]), int(bbox[3])), color=(0, 255, 0), thickness=2)
         cv2.imshow('dets', img0)
-        cv2.waitKey(0)
-        id0 = id0-1
+        cv2.waitKey(1)
         '''
+        # id0 = id0-1
+        
 
         if len(dets) > 0:
             '''Detections'''

@@ -1,1 +1,14 @@
 .idea
+__pycache__
+hoi_test*
+cache.pkl
+*.pth
+*.pyc
+*/__pycache__/*
+*.mp4
+demos/
+DCNv2/
+RoIAlign.pytorch
+*.log
+*/py-motmetrics
+*.weights

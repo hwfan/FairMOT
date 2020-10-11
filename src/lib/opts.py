@@ -23,10 +23,15 @@ class opts(object):
                                   'Reloaded the optimizer parameter and '
                                   'set load_model to model_last.pth '
                                   'in the exp dir if load_model is empty.') 
-
+    self.parser.add_argument("--range",
+                        nargs=2,
+                        type=int,
+                        default=[0, -1],
+                        help="")
     # system
     self.parser.add_argument('--gpus', default='0, 1',
                              help='-1 for CPU, use comma for multiple gpus')
+    self.parser.add_argument('--custom-gpus', default='0', type=str)
     self.parser.add_argument('--num_workers', type=int, default=8,
                              help='dataloader threads. 0 for single-thread.')
     self.parser.add_argument('--not_cuda_benchmark', action='store_true',
@@ -117,9 +122,9 @@ class opts(object):
     self.parser.add_argument('--input-video', type=str,
                              default='../videos/MOT16-03.mp4',
                              help='path to the input video')
-    self.parser.add_argument('--output-format', type=str, default='video', help='video or text')
+    self.parser.add_argument('--output-format', type=str, default='text', help='video or text')
     self.parser.add_argument('--output-root', type=str, default='../demos', help='expected output root path')
-
+    self.parser.add_argument('--paths-pkl', type=str, default='/home/hongwei/track-human/deep_sort_pytorch/test_ava_path_list.pkl')
     # mot
     self.parser.add_argument('--data_cfg', type=str,
                              default='../src/lib/cfg/data.json',

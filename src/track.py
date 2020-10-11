@@ -11,14 +11,14 @@ import argparse
 import motmetrics as mm
 import numpy as np
 import torch
-
+import ipdb
 from tracker.multitracker import JDETracker
 from tracking_utils import visualization as vis
 from tracking_utils.log import logger
 from tracking_utils.timer import Timer
 from tracking_utils.evaluation import Evaluator
 import datasets.dataset.jde as datasets
-
+from tqdm import tqdm
 from tracking_utils.utils import mkdir_if_missing
 from opts import opts
 
@@ -31,18 +31,18 @@ def write_results(filename, results, data_type):
     else:
         raise ValueError(data_type)
 
-    with open(filename, 'w') as f:
-        for frame_id, tlwhs, track_ids in results:
-            if data_type == 'kitti':
-                frame_id -= 1
-            for tlwh, track_id in zip(tlwhs, track_ids):
-                if track_id < 0:
-                    continue
-                x1, y1, w, h = tlwh
-                x2, y2 = x1 + w, y1 + h
-                line = save_format.format(frame=frame_id, id=track_id, x1=x1, y1=y1, x2=x2, y2=y2, w=w, h=h)
-                f.write(line)
-    logger.info('save results to {}'.format(filename))
+    with open(filename, 'a') as f:
+        frame_id, tlwhs, track_ids = results
+        if data_type == 'kitti':
+            frame_id -= 1
+        for tlwh, track_id in zip(tlwhs, track_ids):
+            if track_id < 0:
+                continue
+            x1, y1, w, h = tlwh
+            x2, y2 = x1 + w, y1 + h
+            line = save_format.format(frame=frame_id, id=track_id, x1=x1, y1=y1, x2=x2, y2=y2, w=w, h=h)
+            f.write(line)
+    # logger.info('save results to {}'.format(filename))
 
 
 def write_results_score(filename, results, data_type):
@@ -64,25 +64,24 @@ def write_results_score(filename, results, data_type):
                 x2, y2 = x1 + w, y1 + h
                 line = save_format.format(frame=frame_id, id=track_id, x1=x1, y1=y1, x2=x2, y2=y2, w=w, h=h, s=score)
                 f.write(line)
-    logger.info('save results to {}'.format(filename))
+    # logger.info('save results to {}'.format(filename))
 
 
-def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_image=True, frame_rate=30):
+def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_image=True, frame_rate=30, tasks_num=50, idx=0):
     if save_dir:
         mkdir_if_missing(save_dir)
     tracker = JDETracker(opt, frame_rate=frame_rate)
-    timer = Timer()
-    results = []
+    # timer = Timer()
     frame_id = 0
     #for path, img, img0 in dataloader:
-    for i, (path, img, img0) in enumerate(dataloader):
+    for i, (path, img, img0) in enumerate(tqdm(dataloader)):
         #if i % 8 != 0:
             #continue
-        if frame_id % 20 == 0:
-            logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
-
+        # if frame_id % 20 == 0:
+        #     logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
+        logger.info('remained {} / {}'.format(tasks_num-idx, tasks_num))
         # run tracking
-        timer.tic()
+        # timer.tic()
         blob = torch.from_numpy(img).cuda().unsqueeze(0)
         online_targets = tracker.update(blob, img0)
         online_tlwhs = []
@@ -96,9 +95,9 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
                 online_tlwhs.append(tlwh)
                 online_ids.append(tid)
                 #online_scores.append(t.score)
-        timer.toc()
+        # timer.toc()
         # save results
-        results.append((frame_id + 1, online_tlwhs, online_ids))
+        write_results(result_filename, (frame_id + 1, online_tlwhs, online_ids), data_type)
         #results.append((frame_id + 1, online_tlwhs, online_ids, online_scores))
         if show_image or save_dir is not None:
             online_im = vis.plot_tracking(img0, online_tlwhs, online_ids, frame_id=frame_id,
@@ -108,10 +107,12 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
         if save_dir is not None:
             cv2.imwrite(os.path.join(save_dir, '{:05d}.jpg'.format(frame_id)), online_im)
         frame_id += 1
+        if frame_id % 5 == 0:
+            torch.cuda.empty_cache()
     # save results
-    write_results(result_filename, results, data_type)
+    
     #write_results_score(result_filename, results, data_type)
-    return frame_id, timer.average_time, timer.calls
+    # return frame_id, timer.average_time, timer.calls
 
 
 def main(opt, data_root='/data/MOT16/train', det_root=None, seqs=('MOT16-05',), exp_name='demo',
